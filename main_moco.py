@@ -15,6 +15,7 @@ import shutil
 import time
 import warnings
 from functools import partial
+from typing import Optional, Callable
 
 import torch
 import torch.nn as nn
@@ -29,13 +30,16 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as torchvision_models
 from torch.utils.tensorboard import SummaryWriter
+from torchvision.datasets import ImageNet, ImageFolder
 
 import moco.builder
 import moco.loader
 import moco.optimizer
 
 import vits
-
+from moco.cassle_augmentations import CASSLERandomResizedCrop, CASSLEColorJitter, CASSLERandomApply, \
+    CASSLERandomGrayscale, CASSLEGaussianBlur, CASSLEGaussianBlur2, CASSLERandomHorizontalFlip, CASSLERandomSolarize, \
+    CASSLECompose
 
 torchvision_model_names = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
@@ -117,6 +121,8 @@ parser.add_argument('--warmup-epochs', default=10, type=int, metavar='N',
 parser.add_argument('--crop-min', default=0.08, type=float,
                     help='minimum scale for random cropping (default: 0.08)')
 
+parser.add_argument("--cassle", action="store_true", default=False,)
+
 
 def main():
     args = parser.parse_args()
@@ -180,11 +186,11 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.arch.startswith('vit'):
         model = moco.builder.MoCo_ViT(
             partial(vits.__dict__[args.arch], stop_grad_conv1=args.stop_grad_conv1),
-            args.moco_dim, args.moco_mlp_dim, args.moco_t)
+            args.moco_dim, args.moco_mlp_dim, args.moco_t, cassle=args.cassle)
     else:
         model = moco.builder.MoCo_ResNet(
             partial(torchvision_models.__dict__[args.arch], zero_init_residual=True), 
-            args.moco_dim, args.moco_mlp_dim, args.moco_t)
+            args.moco_dim, args.moco_mlp_dim, args.moco_t, cassle=args.cassle)
 
     # infer learning rate before changing batch size
     args.lr = args.lr * args.batch_size / 256
@@ -259,30 +265,83 @@ def main_worker(gpu, ngpus_per_node, args):
                                      std=[0.229, 0.224, 0.225])
 
     # follow BYOL's augmentation recipe: https://arxiv.org/abs/2006.07733
+    # augmentation1 = [
+    #     transforms.RandomResizedCrop(224, scale=(args.crop_min, 1.)),
+    #     transforms.RandomApply([
+    #         transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
+    #     ], p=0.8),
+    #     transforms.RandomGrayscale(p=0.2),
+    #     transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=1.0),
+    #     transforms.RandomHorizontalFlip(),
+
+    # ]
+
     augmentation1 = [
-        transforms.RandomResizedCrop(224, scale=(args.crop_min, 1.)),
-        transforms.RandomApply([
-            transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
-        ], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
-        transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=1.0),
-        transforms.RandomHorizontalFlip(),
+        CASSLERandomResizedCrop(224, scale=(args.crop_min, 1.)),
+        CASSLERandomApply([
+                    CASSLEColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
+                ], p=0.8,
+                defaults={
+                        "jitter": torch.tensor([1.0, 1.0, 1.0, 0.0]),
+                        "diff": torch.tensor([0.0, 0.0, 0.0])
+                    }
+        ),
+        CASSLERandomGrayscale(p=0.2),
+        CASSLEGaussianBlur2(p=1,  radius_min=0.1, radius_max=2.0),
+        CASSLERandomSolarize(p=0, threshold=128),
+        CASSLERandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize
     ]
 
     augmentation2 = [
-        transforms.RandomResizedCrop(224, scale=(args.crop_min, 1.)),
-        transforms.RandomApply([
-            transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
-        ], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
-        transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.1),
-        transforms.RandomApply([moco.loader.Solarize()], p=0.2),
-        transforms.RandomHorizontalFlip(),
+        CASSLERandomResizedCrop(224, scale=(args.crop_min, 1.)),
+        CASSLERandomApply([
+                    CASSLEColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
+                ], p=0.8,
+            defaults={
+                "jitter": torch.tensor([1.0, 1.0, 1.0, 0.0]),
+                "diff": torch.tensor([0.0, 0.0, 0.0])
+            }
+        ),
+        CASSLERandomGrayscale(p=0.2),
+
+        CASSLEGaussianBlur2(p=0.1,  radius_min=0.1, radius_max=2.0),
+        CASSLERandomSolarize(p=0.2, threshold=128),
+
+        CASSLERandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize
     ]
+
+    # class ImageNetMock(ImageFolder):
+    #     def __init__(
+    #             self,
+    #             *,
+    #             # split: "ImageNet.Split",
+    #             root: str = None,
+    #             # extra: str = None,
+    #             # transforms: Optional[Callable] = None,
+    #             transform: Optional[Callable] = None,
+    #             target_transform: Optional[Callable] = None,
+    #     ) -> None:
+    #         self.transform = transform
+    #         # super().__init__(root=root, transform=transform,
+    #         #                  target_transform=target_transform)
+    #
+    #     def __len__(self) -> int:
+    #         return 10
+    #
+    #     def __getitem__(self, index: int):
+    #         from PIL import Image
+    #         return self.transform(Image.new("RGB", (224, 224))), -1
+
+        # train_dataset = datasets.ImageFolder(
+
+    # train_dataset = ImageNetMock(
+    #     root=traindir,
+    #     transform=moco.loader.TwoCropsTransform(CASSLECompose(augmentation1),
+    #                                             CASSLECompose(augmentation2)))
 
     train_dataset = datasets.ImageFolder(
         traindir,
@@ -344,13 +403,27 @@ def train(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
         if args.moco_m_cos:
             moco_m = adjust_moco_momentum(epoch + i / iters_per_epoch, args)
 
+        # (im1, augd1), (im2, augd2) = images
+        # print([type(t) for t in images[0]])
+        # assert False,{k: v.shape for k, v in images[0][1].items()}
+        # assert False, [t.keys() for t in images]
+
+        (img1, aug1), (img2, aug2) = [
+            (im[0], im[1]["concat"])
+            for im in images
+        ]
         if args.gpu is not None:
-            images[0] = images[0].cuda(args.gpu, non_blocking=True)
-            images[1] = images[1].cuda(args.gpu, non_blocking=True)
+            img1 = img1.cuda(args.gpu, non_blocking=True)
+            aug1 = aug1.cuda(args.gpu, non_blocking=True)
+            img2 = img2.cuda(args.gpu, non_blocking=True)
+            aug2 = aug2.cuda(args.gpu, non_blocking=True)
+
+
+        # assert False, [t.shape for t in [img1, img2, aug1, aug2]]
 
         # compute output
         with torch.cuda.amp.autocast(True):
-            loss = model(images[0], images[1], moco_m)
+            loss = model(img1, img2, aug1, aug2, moco_m)
 
         losses.update(loss.item(), images[0].size(0))
         if args.rank == 0:

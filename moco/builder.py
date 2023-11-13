@@ -13,7 +13,7 @@ class MoCo(nn.Module):
     Build a MoCo model with a base encoder, a momentum encoder, and two MLPs
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=1.0):
+    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=1.0, cassle: float = False):
         """
         dim: feature dimension (default: 256)
         mlp_dim: hidden dimension in MLPs (default: 4096)
@@ -27,11 +27,26 @@ class MoCo(nn.Module):
         self.base_encoder = base_encoder(num_classes=mlp_dim)
         self.momentum_encoder = base_encoder(num_classes=mlp_dim)
 
+        self.cassle = cassle
         self._build_projector_and_predictor_mlps(dim, mlp_dim)
+
+        if self.cassle:
+            self.base_aug_processor = self._build_mlp(6, 15, 64, 64, )
+            self.momentum_aug_processor = self._build_mlp(6, 15, 64, 64, )
+
+            for param_b, param_m in zip(self.base_aug_processor.parameters(), self.momentum_aug_processor.parameters()):
+                param_m.data.copy_(param_b.data)  # initialize
+                param_m.requires_grad = False  # not update by gradient
 
         for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
             param_m.data.copy_(param_b.data)  # initialize
             param_m.requires_grad = False  # not update by gradient
+
+        for param_b, param_m in zip(self.base_projector.parameters(), self.momentum_projector.parameters()):
+            param_m.data.copy_(param_b.data)  # initialize
+            param_m.requires_grad = False  # not update by gradient
+
+
 
     def _build_mlp(self, num_layers, input_dim, mlp_dim, output_dim, last_bn=True):
         mlp = []
@@ -60,6 +75,13 @@ class MoCo(nn.Module):
         for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
             param_m.data = param_m.data * m + param_b.data * (1. - m)
 
+        for param_b, param_m in zip(self.base_projector.parameters(), self.momentum_projector.parameters()):
+            param_m.data = param_m.data * m + param_b.data * (1. - m)
+
+        if self.cassle:
+            for param_b, param_m in zip(self.base_aug_processor.parameters(), self.momentum_aug_processor.parameters()):
+                param_m.data = param_m.data * m + param_b.data * (1. - m)
+
     def contrastive_loss(self, q, k):
         # normalize
         q = nn.functional.normalize(q, dim=1)
@@ -72,7 +94,7 @@ class MoCo(nn.Module):
         labels = (torch.arange(N, dtype=torch.long) + N * torch.distributed.get_rank()).cuda()
         return nn.CrossEntropyLoss()(logits, labels) * (2 * self.T)
 
-    def forward(self, x1, x2, m):
+    def forward(self, x1, x2, a1, a2, m):
         """
         Input:
             x1: first views of images
@@ -83,8 +105,20 @@ class MoCo(nn.Module):
         """
 
         # compute features
-        q1 = self.predictor(self.base_encoder(x1))
-        q2 = self.predictor(self.base_encoder(x2))
+
+        e1 = self.base_encoder(x1)
+        e2 = self.base_encoder(x2)
+
+        if self.cassle:
+            g1 = self.base_aug_processor(a1)
+            g2 = self.base_aug_processor(a2)
+            e1 = torch.cat([e1, g1], dim=1)
+            e2 = torch.cat([e2, g2], dim=1)
+
+        # assert False, e1.shape
+        p1 = self.base_projector(e1)
+        q1 = self.predictor(p1)
+        q2 = self.predictor(self.base_projector(e2))
 
         with torch.no_grad():  # no gradient
             self._update_momentum_encoder(m)  # update the momentum encoder
@@ -93,17 +127,31 @@ class MoCo(nn.Module):
             k1 = self.momentum_encoder(x1)
             k2 = self.momentum_encoder(x2)
 
+            if self.cassle:
+                g1 = self.momentum_aug_processor(a1)
+                g2 = self.momentum_aug_processor(a2)
+                k1 = torch.cat([k1, g1], dim=1)
+                k2 = torch.cat([k2, g2], dim=1)
+
+            k1 = self.momentum_projector(k1)
+            k2 = self.momentum_projector(k2)
+
         return self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1)
 
 
 class MoCo_ResNet(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.fc.weight.shape[1]
-        del self.base_encoder.fc, self.momentum_encoder.fc # remove original fc layer
+
+        if self.cassle:
+            hidden_dim += 64
+
+        self.base_encoder.fc, self.momentum_encoder.fc = nn.Sequential(), nn.Sequential()
 
         # projectors
-        self.base_encoder.fc = self._build_mlp(2, hidden_dim, mlp_dim, dim)
-        self.momentum_encoder.fc = self._build_mlp(2, hidden_dim, mlp_dim, dim)
+        self.base_projector = self._build_mlp(2, hidden_dim, mlp_dim, dim)
+
+        self.momentum_projector = self._build_mlp(2, hidden_dim, mlp_dim, dim)
 
         # predictor
         self.predictor = self._build_mlp(2, dim, mlp_dim, dim, False)
@@ -112,11 +160,15 @@ class MoCo_ResNet(MoCo):
 class MoCo_ViT(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.head.weight.shape[1]
-        del self.base_encoder.head, self.momentum_encoder.head # remove original fc layer
+        if self.cassle:
+            hidden_dim += 64
+
+        self.base_encoder.head, self.momentum_encoder.head = nn.Sequential(), nn.Sequential()
+        # del self.base_encoder.head, self.momentum_encoder.head # remove original fc layer
 
         # projectors
-        self.base_encoder.head = self._build_mlp(3, hidden_dim, mlp_dim, dim)
-        self.momentum_encoder.head = self._build_mlp(3, hidden_dim, mlp_dim, dim)
+        self.base_projector = self._build_mlp(3, hidden_dim, mlp_dim, dim)
+        self.momentum_projector = self._build_mlp(3, hidden_dim, mlp_dim, dim)
 
         # predictor
         self.predictor = self._build_mlp(2, dim, mlp_dim, dim)

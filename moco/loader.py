@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
-
+import torch
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
@@ -20,6 +20,11 @@ class TwoCropsTransform:
     def __call__(self, x):
         im1 = self.base_transform1(x)
         im2 = self.base_transform2(x)
+
+        aug_keys = sorted(im1[1].keys())
+        assert set(aug_keys) == set(im2[1].keys())
+        for im in im1, im2:
+            im[1]["concat"] = torch.concat([im1[1][k] for k in aug_keys])
         return [im1, im2]
 
 
