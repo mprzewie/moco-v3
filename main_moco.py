@@ -238,7 +238,14 @@ def main_worker(gpu, ngpus_per_node, args):
                                 weight_decay=args.weight_decay)
         
     scaler = torch.cuda.amp.GradScaler()
-    summary_writer = SummaryWriter() if args.rank == 0 else None
+
+    if args.rank == 0:
+        args.save_dir.mkdir(parents=True, exist_ok=True)
+        summary_writer = SummaryWriter(
+            log_dir=args.save_dir
+        )
+    else:
+        summary_writer = None
 
     # optionally resume from a checkpoint
     if args.resume:
