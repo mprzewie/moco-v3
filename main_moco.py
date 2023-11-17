@@ -426,7 +426,7 @@ def train(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
         with torch.cuda.amp.autocast(True):
             loss = model(img1, img2, aug1, aug2, moco_m)
 
-        losses.update(loss.item(), images[0].size(0))
+        losses.update(loss.item(), img1.size(0))
         if args.rank == 0:
             summary_writer.add_scalar("loss", loss.item(), epoch * iters_per_epoch + i)
 
