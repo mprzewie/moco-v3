@@ -15,6 +15,7 @@ import shutil
 import time
 import warnings
 from functools import partial
+from pathlib import Path
 from typing import Optional, Callable
 
 import torch
@@ -122,6 +123,7 @@ parser.add_argument('--crop-min', default=0.08, type=float,
                     help='minimum scale for random cropping (default: 0.08)')
 
 parser.add_argument("--cassle", action="store_true", default=False,)
+parser.add_argument("--save-dir", type=Path, default=Path("save"))
 
 
 def main():
@@ -371,7 +373,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'state_dict': model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
                 'scaler': scaler.state_dict(),
-            }, is_best=False, filename='checkpoint_%04d.pth.tar' % epoch)
+            }, is_best=False, filename=args.save_dir / ('checkpoint_%04d.pth.tar' % epoch))
 
     if args.rank == 0:
         summary_writer.close()
@@ -442,10 +444,10 @@ def train(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
             progress.display(i)
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, filename: Path):
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, filename.parent / 'model_best.pth.tar')
 
 
 class AverageMeter(object):
