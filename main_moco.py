@@ -335,9 +335,8 @@ def main_worker(gpu, ngpus_per_node, args):
     #     def __getitem__(self, index: int):
     #         from PIL import Image
     #         return self.transform(Image.new("RGB", (224, 224))), -1
-
-        # train_dataset = datasets.ImageFolder(
-
+    #
+    #
     # train_dataset = ImageNetMock(
     #     root=traindir,
     #     transform=moco.loader.TwoCropsTransform(CASSLECompose(augmentation1),
@@ -345,8 +344,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     train_dataset = datasets.ImageFolder(
         traindir,
-        moco.loader.TwoCropsTransform(transforms.Compose(augmentation1), 
-                                      transforms.Compose(augmentation2)))
+        moco.loader.TwoCropsTransform(CASSLECompose(augmentation1),
+                                      CASSLECompose(augmentation2)))
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
