@@ -24,7 +24,7 @@ class TwoCropsTransform:
         aug_keys = sorted(im1[1].keys())
         assert set(aug_keys) == set(im2[1].keys())
         for im in im1, im2:
-            im[1]["concat"] = torch.concat([im1[1][k] for k in aug_keys])
+            im[1]["concat"] = torch.concat([im[1][k] for k in aug_keys])
         return [im1, im2]
 
 
