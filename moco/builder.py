@@ -13,13 +13,16 @@ class MoCo(nn.Module):
     Build a MoCo model with a base encoder, a momentum encoder, and two MLPs
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=1.0, cassle: float = False):
+    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=1.0, cassle: float = False, cassle_h: int=16, cassle_w: int=64):
         """
         dim: feature dimension (default: 256)
         mlp_dim: hidden dimension in MLPs (default: 4096)
         T: softmax temperature (default: 1.0)
         """
         super(MoCo, self).__init__()
+
+        self.cassle_w = cassle_w
+        self.cassle_h = cassle_h
 
         self.T = T
 
@@ -31,8 +34,8 @@ class MoCo(nn.Module):
         self._build_projector_and_predictor_mlps(dim, mlp_dim)
 
         if self.cassle:
-            self.base_aug_processor = self._build_mlp(6, 15, 64, 64, )
-            self.momentum_aug_processor = self._build_mlp(6, 15, 64, 64, )
+            self.base_aug_processor = self._build_mlp(cassle_h, 15, cassle_w, cassle_w, )
+            self.momentum_aug_processor = self._build_mlp(cassle_h, 15, cassle_w, cassle_w, )
 
             for param_b, param_m in zip(self.base_aug_processor.parameters(), self.momentum_aug_processor.parameters()):
                 param_m.data.copy_(param_b.data)  # initialize
@@ -144,7 +147,7 @@ class MoCo_ResNet(MoCo):
         hidden_dim = self.base_encoder.fc.weight.shape[1]
 
         if self.cassle:
-            hidden_dim += 64
+            hidden_dim += self.cassle_w
 
         self.base_encoder.fc, self.momentum_encoder.fc = nn.Sequential(), nn.Sequential()
 
@@ -161,7 +164,7 @@ class MoCo_ViT(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.head.weight.shape[1]
         if self.cassle:
-            hidden_dim += 64
+            hidden_dim += self.cassle_w
 
         self.base_encoder.head, self.momentum_encoder.head = nn.Sequential(), nn.Sequential()
         # del self.base_encoder.head, self.momentum_encoder.head # remove original fc layer

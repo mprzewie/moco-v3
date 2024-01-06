@@ -123,6 +123,8 @@ parser.add_argument('--crop-min', default=0.08, type=float,
                     help='minimum scale for random cropping (default: 0.08)')
 
 parser.add_argument("--cassle", action="store_true", default=False,)
+parser.add_argument("--cassle_w", type=int, default=64)
+parser.add_argument("--cassle_h", type=int, default=6)
 parser.add_argument("--save-dir", type=Path, default=Path("save"))
 
 
@@ -188,11 +190,11 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.arch.startswith('vit'):
         model = moco.builder.MoCo_ViT(
             partial(vits.__dict__[args.arch], stop_grad_conv1=args.stop_grad_conv1),
-            args.moco_dim, args.moco_mlp_dim, args.moco_t, cassle=args.cassle)
+            args.moco_dim, args.moco_mlp_dim, args.moco_t, cassle=args.cassle, cassle_h=args.cassle_h, cassle_w=args.cassle_w)
     else:
         model = moco.builder.MoCo_ResNet(
             partial(torchvision_models.__dict__[args.arch], zero_init_residual=True), 
-            args.moco_dim, args.moco_mlp_dim, args.moco_t, cassle=args.cassle)
+            args.moco_dim, args.moco_mlp_dim, args.moco_t, cassle=args.cassle, cassle_h=args.cassle_h, cassle_w=args.cassle_w)
 
     # infer learning rate before changing batch size
     args.lr = args.lr * args.batch_size / 256
