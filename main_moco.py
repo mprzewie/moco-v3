@@ -36,7 +36,7 @@ from torchvision.datasets import ImageNet, ImageFolder
 import moco.builder
 import moco.loader
 import moco.optimizer
-
+import socket
 import vits
 from moco.cassle_augmentations import CASSLERandomResizedCrop, CASSLEColorJitter, CASSLERandomApply, \
     CASSLERandomGrayscale, CASSLEGaussianBlur, CASSLEGaussianBlur2, CASSLERandomHorizontalFlip, CASSLERandomSolarize, \
@@ -157,6 +157,7 @@ def main():
         args.world_size = ngpus_per_node * args.world_size
         # Use torch.multiprocessing.spawn to launch distributed processes: the
         # main_worker process function
+        print(args.rank, socket.gethostname())
         mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
     else:
         # Simply call main_worker function
