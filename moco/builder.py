@@ -13,7 +13,11 @@ class MoCo(nn.Module):
     Build a MoCo model with a base encoder, a momentum encoder, and two MLPs
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=1.0, cassle: float = False, cassle_h: int=16, cassle_w: int=64):
+    def __init__(
+            self, base_encoder, dim=256, mlp_dim=4096, T=1.0,
+            cassle: float = False, cassle_h: int=6, cassle_w: int=64,
+            cassle_method: str="cat"
+    ):
         """
         dim: feature dimension (default: 256)
         mlp_dim: hidden dimension in MLPs (default: 4096)
@@ -23,6 +27,7 @@ class MoCo(nn.Module):
 
         self.cassle_w = cassle_w
         self.cassle_h = cassle_h
+        self.cassle_method = cassle_method
 
         self.T = T
 
@@ -34,8 +39,10 @@ class MoCo(nn.Module):
         self._build_projector_and_predictor_mlps(dim, mlp_dim)
 
         if self.cassle:
-            self.base_aug_processor = self._build_mlp(cassle_h, 15, cassle_w, cassle_w, )
-            self.momentum_aug_processor = self._build_mlp(cassle_h, 15, cassle_w, cassle_w, )
+            out_size = cassle_w if cassle_method == "cat" else mlp_dim
+
+            self.base_aug_processor = self._build_mlp(cassle_h, 15, cassle_w, out_size )
+            self.momentum_aug_processor = self._build_mlp(cassle_h, 15, cassle_w, out_size)
 
             for param_b, param_m in zip(self.base_aug_processor.parameters(), self.momentum_aug_processor.parameters()):
                 param_m.data.copy_(param_b.data)  # initialize
@@ -115,8 +122,14 @@ class MoCo(nn.Module):
         if self.cassle:
             g1 = self.base_aug_processor(a1)
             g2 = self.base_aug_processor(a2)
-            e1 = torch.cat([e1, g1], dim=1)
-            e2 = torch.cat([e2, g2], dim=1)
+
+            if self.cassle_method == "cat":
+                e1 = torch.cat([e1, g1], dim=1)
+                e2 = torch.cat([e2, g2], dim=1)
+            elif self.cassle_method == "add":
+                e1 = e1 + g1
+                e2 = e2 + g2
+
 
         # assert False, e1.shape
         p1 = self.base_projector(e1)
@@ -146,7 +159,7 @@ class MoCo_ResNet(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.fc.weight.shape[1]
 
-        if self.cassle:
+        if self.cassle and self.cassle_method == "cat":
             hidden_dim += self.cassle_w
 
         self.base_encoder.fc, self.momentum_encoder.fc = nn.Sequential(), nn.Sequential()
@@ -163,7 +176,8 @@ class MoCo_ResNet(MoCo):
 class MoCo_ViT(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.head.weight.shape[1]
-        if self.cassle:
+
+        if self.cassle and self.cassle_method == "cat":
             hidden_dim += self.cassle_w
 
         self.base_encoder.head, self.momentum_encoder.head = nn.Sequential(), nn.Sequential()
